@@ -10,54 +10,45 @@ headless: Python for the image work, Blender (`-b --factory-startup`) for the re
 
 ## Inputs
 
-A **photo sheet** per rock: a PNG, pure white background, 2 × 3 grid —
-Front | Left / Right | Back / Top | Bottom — each photo above its label. Missing
-cells are fine; front plus one side is the minimum.
+Either a **photo sheet** (PNG or JPG, pure white, 2 × 3 grid: Front | Left / Right |
+Back / Top | Bottom), or a **folder of photos** named front, back, left, right, top,
+bottom (any case), optionally front_left, front_right, back_left, back_right. Hand-held
+photos are fine. Front plus one side is the minimum.
 
-Requirements: Blender 4.x (default path `/Applications/Blender.app/Contents/MacOS/Blender`,
-override with `BLENDER`), Python 3 with numpy, scipy, pillow, scikit-image.
+Requirements: Blender 4.2+ (override with `BLENDER`), Python 3 with `requirements.txt`.
 
 ## Run
 
 ```bash
-./remake.sh SHEETS_DIR OUT_DIR
+./remake.sh SOURCE_DIR OUT_DIR
 ```
 
-Per sheet `NAME.png` → `OUT_DIR/NAME.glb` + `OUT_DIR/NAME_ghost.glb`, work files
-in `work/NAME/`. Then **look at the previews** (`work/NAME/preview_front.png`,
-`preview_angle.png`) next to the sheet before calling it done — render the
-comparison side by side and actually view it.
+Then **look at `work/NAME/report.png`** and read its warnings before calling it done.
+Wrong turn → `work/NAME/overrides.json`: `{"rotate": {"top": 180}}`, then rerun from
+`build_hull.py` onward. `RELIEF=1` adds depth-based hollows (needs torch, transformers).
 
 ## Pipeline (one script per stage)
 
-1. `scripts/cutout_views.py sheet.png work/NAME` — per view: `<view>.png` (photo,
-   background filled from rock edge colours) and `<view>_mask.png`. Rock = any pixel
-   with darkness or chroma > 8 (sheets are pure white — check the paper is 255 before
-   loosening/tightening). Opening + largest component + hole fill. Grid bands are in
-   `ROWS` (shares of sheet height) if a layout differs.
-2. `scripts/build_hull.py work/NAME` — orients views (side turned 90° when its width
-   matches the front height better, by a `MARGIN`), carves a voxel hull from
-   front ∩ side ∩ top (rounded section without top), Gaussian-smooths, marching cubes,
-   scales to `SIZE` (bbox diagonal 1.306 = the tuff), writes `rock.obj` + `rig.json`.
-3. `scripts/build_rock.py -- work/NAME out.glb` (Blender) — decimate, light displace,
-   UV unwrap, project each photo along its axis weighted by normal·direction⁴, bump
-   from luminance, bake DIFFUSE colour + tangent NORMAL, export GLB (JPEG textures),
-   render previews.
-4. `scripts/make_ghost.py -- in.glb out_ghost.glb` (Blender) — glass shell (alpha
-   0.3, BLEND) + wire net: voxel remesh at `WIRE_CELL`, keep largest part,
-   triangulate, jitter in tangent plane, dissolve ~30% edges, shrinkwrap onto a
-   welded/cleaned copy of the surface, wireframe modifier.
+1. `cutout_views.py SOURCE work/NAME` — outlines and filled photos.
+2. `build_hull.py work/NAME` — `orient.py` picks each turn; relaxed outline volumes →
+   `rock.obj`, `rig.json`, `qa.json`.
+3. `prepare_textures.py work/NAME` — lighting, exposure match, height maps, inferred ends.
+4. `build_rock.py -- work/NAME out.glb` (Blender) — bake, export, previews incl. clay.
+5. `make_ghost.py -- in.glb out_ghost.glb` (Blender) — glass shell + wire net.
+6. `qa_report.py work/NAME` — `report.png`.
 
-Hand-built rocks: `scripts/tuff_generator.py` / `scripts/lava_generator.py`, then
-`scripts/export_glb.py -- out.glb TEXSIZE ObjectName` (applies modifiers, bakes
-procedural material — glTF can't carry either otherwise).
+Hand-built rocks: `tuff_generator.py` / `lava_generator.py`, then
+`export_glb.py -- out.glb TEXSIZE ObjectName`.
 
 ## Lessons (check these first when something looks wrong)
 
 - **Pale parts missing** → threshold too strict; the paper is pure white.
 - **White fringe / pale streaks at edges** → background fill must sample from an
   eroded core, not the anti-aliased rim.
-- **Pale glassy streaks on top** → no top photo; the fallback borrows front/back.
+- **Nub or crease on one side, odd colour on it** → a finger is still in the outline;
+  check `<view>_mask.png`.
+- **Grooves or ribs in the clay preview** → raise `--soften` in `build_hull.py`.
+- **Pale parts missing on a hand-held photo** → try `--matte rembg`.
 - **Sizes wildly different** → normalise the bbox diagonal, not the height.
 - **Exported .glb looks nothing like Blender** → modifiers weren't applied or the
   material is procedural; use `export_glb.py`.

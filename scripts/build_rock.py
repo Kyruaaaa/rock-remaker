@@ -1,27 +1,38 @@
 """
-Finish a rock made by build_hull.py and export it as a web-ready .glb.
+Finish a rock made by build_hull.py and prepare_textures.py as a web-ready .glb.
 
   1. imports rock.obj, thins it out and adds a little surface irregularity,
-  2. colours it by projecting the photos onto it from each side: every
-     surface takes the photo that faces it most directly, blending at the
-     edges (front photo on the front, top photo on top, and so on),
-  3. bakes that into a colour texture, plus a normal map made from the
-     photos' light and dark grain so the surface catches light,
-  4. exports the .glb and renders two preview images to check against.
+  2. colours it by projecting each photo from the direction it was taken,
+     every surface taking the photo that faces it most squarely,
+  3. bakes a colour texture and a normal map made from the photos' fine grain,
+  4. exports a compact .glb and renders previews (including a plain clay view
+     for judging the shape alone).
 
-    Blender -b --factory-startup --python build_rock.py -- rock_dir out.glb
+    Blender -b --factory-startup --python build_rock.py -- rock_dir out.glb [--texture 1024 ...]
 """
 
-import bpy
+import argparse
 import json
 import math
 import os
 import sys
 
-argv = sys.argv[sys.argv.index("--") + 1:]
-ROCK_DIR, OUT = os.path.abspath(argv[0]), os.path.abspath(argv[1])
-TEXTURE_SIZE = 1024
-TARGET_FACES = 30000
+import bpy
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import blender_common as bc  # noqa: E402
+
+p = argparse.ArgumentParser()
+p.add_argument("rock_dir")
+p.add_argument("out")
+p.add_argument("--texture", type=int, default=1024, help="baked texture size in pixels")
+p.add_argument("--faces", type=int, default=30000, help="target mesh faces")
+p.add_argument("--blend-power", type=float, default=8.0, help="higher = narrower blend between photos")
+p.add_argument("--lumps", type=float, default=0.015, help="made-up surface irregularity, 0 for none")
+p.add_argument("--no-draco", action="store_true", help="skip mesh compression")
+a = p.parse_args(bc.script_args())
+
+ROCK_DIR, OUT = os.path.abspath(a.rock_dir), os.path.abspath(a.out)
 rig = json.load(open(os.path.join(ROCK_DIR, "rig.json")))
 W, D, H = rig["W"], rig["D"], rig["H"]
 scene = bpy.context.scene
@@ -35,64 +46,42 @@ rock = bpy.context.selected_objects[0]
 rock.name = "Rock"
 layer.objects.active = rock
 
-
-def apply_modifiers(obj):
-    dg = bpy.context.evaluated_depsgraph_get()
-    mesh = bpy.data.meshes.new_from_object(obj.evaluated_get(dg))
-    obj.modifiers.clear()
-    old, obj.data = obj.data, mesh
-    bpy.data.meshes.remove(old)
-
-
 dec = rock.modifiers.new("Decimate", "DECIMATE")
-dec.ratio = min(1.0, TARGET_FACES / len(rock.data.polygons))
-lumps = rock.modifiers.new("Lumps", "DISPLACE")
-tex = bpy.data.textures.new("Lumps", "CLOUDS")
-tex.noise_scale = 0.18
-lumps.texture = tex
-lumps.texture_coords = "LOCAL"
-lumps.strength = 0.025
-lumps.mid_level = 0.5
-apply_modifiers(rock)
+dec.ratio = min(1.0, a.faces / len(rock.data.polygons))
+if a.lumps > 0:
+    lumps = rock.modifiers.new("Lumps", "DISPLACE")
+    tex = bpy.data.textures.new("Lumps", "CLOUDS")
+    tex.noise_scale = 0.18
+    lumps.texture = tex
+    lumps.texture_coords = "LOCAL"
+    lumps.strength = a.lumps
+    lumps.mid_level = 0.5
+bc.apply_modifiers(rock)
 
 bpy.ops.object.mode_set(mode="EDIT")
 bpy.ops.mesh.select_all(action="SELECT")
 bpy.ops.mesh.normals_make_consistent(inside=False)
-bpy.ops.uv.smart_project(angle_limit=math.radians(66), island_margin=0.003)
+bpy.ops.uv.smart_project(angle_limit=math.radians(66), island_margin=0.008)   # about 8 px: seams survive mipmapping
 bpy.ops.object.mode_set(mode="OBJECT")
 bpy.ops.object.shade_smooth()
 
 # ---------------------------------------------------------------- photo projection
-# for each view: which way it faces, and how object x/y/z map to the photo's u/v
-# (u = a*coord + b, v = c*coord + d; photo v runs bottom to top)
-VIEWS = {
-    "front":  ((0, -1, 0), ("x", 1 / W, 0.5), ("z", 1 / H, 0)),
-    "back":   ((0, 1, 0),  ("x", -1 / W, 0.5), ("z", 1 / H, 0)),
-    "right":  ((1, 0, 0),  ("y", 1 / D, 0.5), ("z", 1 / H, 0)),
-    "left":   ((-1, 0, 0), ("y", -1 / D, 0.5), ("z", 1 / H, 0)),
-    "top":    ((0, 0, 1),  ("x", 1 / W, 0.5), ("y", 1 / D, 0.5)),
-    "bottom": ((0, 0, -1), ("x", 1 / W, 0.5), ("y", -1 / D, 0.5)),
-}
-
 mat = bpy.data.materials.new("Projected")
 mat.use_nodes = True
 nt = mat.node_tree
 N, L = nt.nodes, nt.links
 N.clear()
-out = N.new("ShaderNodeOutputMaterial")
+output = N.new("ShaderNodeOutputMaterial")
 bsdf = N.new("ShaderNodeBsdfPrincipled")
 bsdf.inputs["Roughness"].default_value = 0.9
-L.new(bsdf.outputs["BSDF"], out.inputs["Surface"])
+L.new(bsdf.outputs["BSDF"], output.inputs["Surface"])
 tc = N.new("ShaderNodeTexCoord")
-sep = N.new("ShaderNodeSeparateXYZ")
-L.new(tc.outputs["Object"], sep.inputs["Vector"])
-axis = {"x": sep.outputs["X"], "y": sep.outputs["Y"], "z": sep.outputs["Z"]}
 
 
-def math_node(op, a, b=None, c=None):
+def math_node(op, x, y=None, z=None):
     n = N.new("ShaderNodeMath")
     n.operation = op
-    for i, v in enumerate((a, b, c)):
+    for i, v in enumerate((x, y, z)):
         if v is None:
             continue
         if isinstance(v, (int, float)):
@@ -102,105 +91,80 @@ def math_node(op, a, b=None, c=None):
     return n.outputs[0]
 
 
-# without a top or bottom photo, borrow the front / back photo so those
-# surfaces get real rock texture rather than stretched edge pixels
-FALLBACK = {"top": ["front"], "bottom": ["back", "front"]}
+def dot(socket, vec):
+    n = N.new("ShaderNodeVectorMath")
+    n.operation = "DOT_PRODUCT"
+    L.new(socket, n.inputs[0])
+    n.inputs[1].default_value = vec
+    return n.outputs["Value"]
 
-color_sum, weight_sum = None, None
-for name, (facing, (ua, us, uo), (va, vs_, vo)) in VIEWS.items():
-    src = name if name in rig["views"] else next((f for f in FALLBACK.get(name, []) if f in rig["views"]), None)
-    if src is None:
-        continue
-    img = bpy.data.images.load(os.path.join(ROCK_DIR, rig["views"][src]["image"]))
-    u = math_node("MULTIPLY_ADD", axis[ua], us, uo)
-    v = math_node("MULTIPLY_ADD", axis[va], vs_, vo)
+
+def vec_op(op, x, y):
+    n = N.new("ShaderNodeVectorMath")
+    n.operation = op
+    L.new(x, n.inputs[0])
+    if op == "SCALE":
+        L.new(y, n.inputs["Scale"])
+    else:
+        L.new(y, n.inputs[1])
+    return n.outputs["Vector"]
+
+
+def load_image(name, noncolor=False):
+    img = bpy.data.images.load(os.path.join(ROCK_DIR, name))
+    if noncolor:
+        img.colorspace_settings.name = "Non-Color"
+    return img
+
+
+colour_sum, height_sum, weight_sum = None, None, None
+for name, v in rig["views"].items():
+    u = math_node("MULTIPLY_ADD", dot(tc.outputs["Object"], v["u_axis"]), v["su"], v["ou"])
+    w_v = math_node("MULTIPLY_ADD", dot(tc.outputs["Object"], v["v_axis"]), v["sv"], v["ov"])
     uv = N.new("ShaderNodeCombineXYZ")
     L.new(u, uv.inputs["X"])
-    L.new(v, uv.inputs["Y"])
-    t = N.new("ShaderNodeTexImage")
-    t.image = img
-    t.extension = "EXTEND"
-    L.new(uv.outputs["Vector"], t.inputs["Vector"])
-    # weight: how squarely the surface faces this photo, sharpened
-    dot = N.new("ShaderNodeVectorMath")
-    dot.operation = "DOT_PRODUCT"
-    L.new(tc.outputs["Normal"], dot.inputs[0])
-    dot.inputs[1].default_value = facing
-    w = math_node("POWER", math_node("MAXIMUM", dot.outputs["Value"], 0.0), 4.0)
-    w = math_node("ADD", w, 1e-4)
-    scaled = N.new("ShaderNodeVectorMath")
-    scaled.operation = "SCALE"
-    L.new(t.outputs["Color"], scaled.inputs[0])
-    L.new(w, scaled.inputs["Scale"])
-    if color_sum is None:
-        color_sum, weight_sum = scaled.outputs["Vector"], w
+    L.new(w_v, uv.inputs["Y"])
+    t_c = N.new("ShaderNodeTexImage")
+    t_c.image = load_image(v["image"])
+    t_c.extension = "EXTEND"
+    L.new(uv.outputs["Vector"], t_c.inputs["Vector"])
+    t_h = N.new("ShaderNodeTexImage")
+    t_h.image = load_image(v["height"], noncolor=True)
+    t_h.extension = "EXTEND"
+    L.new(uv.outputs["Vector"], t_h.inputs["Vector"])
+    w = math_node("POWER", math_node("MAXIMUM", dot(tc.outputs["Normal"], v["facing"]), 0.0), a.blend_power)
+    w = math_node("ADD", w, 1e-5)
+    c = vec_op("SCALE", t_c.outputs["Color"], w)
+    h = math_node("MULTIPLY", t_h.outputs["Color"], w)
+    if colour_sum is None:
+        colour_sum, height_sum, weight_sum = c, h, w
     else:
-        add = N.new("ShaderNodeVectorMath")
-        add.operation = "ADD"
-        L.new(color_sum, add.inputs[0])
-        L.new(scaled.outputs["Vector"], add.inputs[1])
-        color_sum = add.outputs["Vector"]
+        colour_sum = vec_op("ADD", colour_sum, c)
+        height_sum = math_node("ADD", height_sum, h)
         weight_sum = math_node("ADD", weight_sum, w)
 
-final = N.new("ShaderNodeVectorMath")
-final.operation = "SCALE"
-L.new(color_sum, final.inputs[0])
-L.new(math_node("DIVIDE", 1.0, weight_sum), final.inputs["Scale"])
-L.new(final.outputs["Vector"], bsdf.inputs["Base Color"])
-# surface relief from the photos' light/dark grain
-bw = N.new("ShaderNodeRGBToBW")
-L.new(final.outputs["Vector"], bw.inputs["Color"])
+inv = math_node("DIVIDE", 1.0, weight_sum)
+final = vec_op("SCALE", colour_sum, inv)
+L.new(final, bsdf.inputs["Base Color"])
 bump = N.new("ShaderNodeBump")
-bump.inputs["Strength"].default_value = 0.45
-bump.inputs["Distance"].default_value = 0.006
-L.new(bw.outputs["Val"], bump.inputs["Height"])
+bump.inputs["Strength"].default_value = 0.6
+bump.inputs["Distance"].default_value = 0.012
+L.new(math_node("MULTIPLY", height_sum, inv), bump.inputs["Height"])
 L.new(bump.outputs["Normal"], bsdf.inputs["Normal"])
 rock.data.materials.clear()
 rock.data.materials.append(mat)
 
 # ---------------------------------------------------------------- bake
-scene.render.engine = "CYCLES"
-scene.cycles.device = "CPU"
-scene.cycles.samples = 8
-
-
-def bake(kind, name, noncolor=False, **kw):
-    img = bpy.data.images.new(name, TEXTURE_SIZE, TEXTURE_SIZE, alpha=False)
-    if noncolor:
-        img.colorspace_settings.name = "Non-Color"
-    target = N.new("ShaderNodeTexImage")
-    target.image = img
-    N.active = target
-    bpy.ops.object.bake(type=kind, margin=8, use_clear=True, **kw)
-    N.remove(target)
-    img.pack()
-    return img
-
-
-color = bake("DIFFUSE", "rock_color", pass_filter={"COLOR"})
-normal = bake("NORMAL", "rock_normal", noncolor=True, normal_space="TANGENT")
-
-web = bpy.data.materials.new("Rock")
-web.use_nodes = True
-wn, wl = web.node_tree.nodes, web.node_tree.links
-b = wn["Principled BSDF"]
-b.inputs["Roughness"].default_value = 0.9
-ct = wn.new("ShaderNodeTexImage"); ct.image = color
-wl.new(ct.outputs["Color"], b.inputs["Base Color"])
-ntex = wn.new("ShaderNodeTexImage"); ntex.image = normal
-nm = wn.new("ShaderNodeNormalMap")
-wl.new(ntex.outputs["Color"], nm.inputs["Color"])
-wl.new(nm.outputs["Normal"], b.inputs["Normal"])
+bc.setup_bake()
+color = bc.bake(N, "DIFFUSE", "rock_color", a.texture, pass_filter={"COLOR"})
+normal = bc.bake(N, "NORMAL", "rock_normal", a.texture, noncolor=True, normal_space="TANGENT")
 rock.data.materials.clear()
-rock.data.materials.append(web)
+rock.data.materials.append(bc.web_material("Rock", color, normal, 0.9))
 
 # ---------------------------------------------------------------- export
-for o in layer.objects:
-    o.select_set(False)
-rock.select_set(True)
-bpy.ops.export_scene.gltf(filepath=OUT, export_format="GLB", use_selection=True,
-                          export_yup=True, export_image_format="JPEG")
-print("exported", OUT)
+bc.select_only(rock)
+bc.export_glb(OUT, draco=not a.no_draco)
+print("exported", OUT, f"{os.path.getsize(OUT) // 1024} KB")
 
 # ---------------------------------------------------------------- previews
 world = bpy.data.worlds.new("W")
@@ -219,12 +183,27 @@ scene.collection.objects.link(cam)
 scene.camera = cam
 scene.render.resolution_x = scene.render.resolution_y = 360
 scene.cycles.samples = 16
+scene.view_settings.view_transform = "Standard"
 scene.render.film_transparent = False
-for tag, yaw, pitch in (("front", 0, 0), ("angle", 35, 25)):
+
+
+def shoot(tag, yaw, pitch):
     r = 6.0
     yaw_r, pitch_r = math.radians(yaw), math.radians(pitch)
     cam.location = (r * math.sin(yaw_r) * math.cos(pitch_r), -r * math.cos(yaw_r) * math.cos(pitch_r),
-                    0.5 + r * math.sin(pitch_r))
+                    H / 2 + r * math.sin(pitch_r))
     cam.rotation_euler = (math.radians(90) - pitch_r, 0, yaw_r)
     scene.render.filepath = os.path.join(ROCK_DIR, f"preview_{tag}.png")
     bpy.ops.render.render(write_still=True)
+
+
+SHOTS = {"front": (0, 0), "right": (90, 0), "back": (180, 0), "left": (270, 0), "top": (0, 89.9), "angle": (35, 25)}
+for tag, (yaw, pitch) in SHOTS.items():
+    shoot(tag, yaw, pitch)
+clay = bpy.data.materials.new("Clay")
+clay.use_nodes = True
+clay.node_tree.nodes["Principled BSDF"].inputs["Base Color"].default_value = (0.55, 0.55, 0.55, 1)
+layer.material_override = clay
+shoot("clay", 35, 25)
+shoot("clay_back", 215, 25)
+shoot("clay_right", 90, 0)

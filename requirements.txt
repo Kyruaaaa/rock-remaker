@@ -1,0 +1,6 @@
+numpy
+scipy
+pillow
+scikit-image
+pytest
+# optional: rembg (--matte rembg), torch + transformers (RELIEF=1)
