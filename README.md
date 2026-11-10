@@ -6,20 +6,32 @@ surface. Built for [Metamorphosis](https://kyruaaaa.github.io/metamorphosis/), a
 clock of rocks transformed by heat, where seven of the eight specimens were
 remade this way ([site code](https://github.com/Kyruaaaa/metamorphosis)).
 
-![Eight remade rocks in clock order](docs/stage7_lineup.jpg)
+![Remade rocks in clock order](docs/stage7_lineup.jpg)
 
 ## Quick start
 
-Needs **Blender 4.x** and **Python 3** with `numpy`, `scipy`, `pillow` and
-`scikit-image`.
+Needs **Blender 4.2 or newer** (tested on 4.5) and Python 3:
 
 ```bash
-./remake.sh path/to/sheets path/to/models
+pip install -r requirements.txt
+./remake.sh examples out
 ```
 
-Every `NAME.png` sheet becomes `NAME.glb` (the rock) and `NAME_ghost.glb` (the
-same rock as glass with an irregular wireframe), in about five seconds each.
-Previews to check against your photos land in `work/NAME/preview_*.png`.
+The source folder can hold photo sheets (`NAME.png` or `NAME.jpg`), subfolders of
+photos, or be one folder of photos named `front`, `back`, `left`, `right`, `top`
+and `bottom`. Hand-held phone photos work: the rock is separated from the room by
+sharpness, position and colour, and fingers are removed from its outline.
+
+Each rock gives `NAME.glb` and `NAME_ghost.glb` (the rock as glass with an irregular
+wireframe), and `work/NAME/report.png`, which sets every photo beside the matching
+render, with warnings. One bad rock doesn't stop the batch, and an existing model is
+only replaced after a successful build.
+
+If a photo is turned the wrong way, add `work/NAME/overrides.json`, such as
+`{"rotate": {"top": 180}}`, with clockwise degrees.
+
+The `.glb` files use Draco mesh compression and WebP textures. `<model-viewer>`
+fetches its Draco decoder from Google's CDN unless you host it yourself.
 
 ## How it works
 
@@ -33,37 +45,41 @@ the top is used when it's there.
 
 ### 2 · Cut each view out — `scripts/cutout_views.py`
 
-Anything not pure white is rock; dust is dropped, holes filled, and only the
-one big piece kept. Each view becomes an outline and a photo whose background
-is filled with the rock's own edge colours, so no white bleeds onto the model.
+On a pure white sheet, anything not white is rock. For ordinary photos the rock
+is found by being sharp, central and differently coloured from the room. Each view
+becomes an outline and a photo whose background is filled with the rock's own
+colours, so no room or white bleeds onto the model.
 
 ![View, outline, filled photo](docs/stage2_cutout.jpg)
 
-### 3 · Turn the views upright — `scripts/build_hull.py`
+### 3 · Turn the views upright — `scripts/orient.py`
 
-Rocks get turned in the hand between shots. A side view whose *width* matches
-the front's height better than its own height was taken lying down, and is
-turned 90°. Near-square views are only turned when the match is clearly better.
+Each view may be turned by any quarter turn. Opposite views should mirror each other,
+neighbours should share colours along their edge, and a top view fixes the width
+to depth ratio. Close calls are listed in the report.
 
 ![Front, side as photographed, side turned](docs/stage3_orient.jpg)
 
 ### 4 · Carve the shape — `scripts/build_hull.py`
 
-A block of tiny cubes (128 along the longest side) is cut by the front outline
-from the front, the side outline from the side and the top outline from above;
-only cubes inside all three survive. No top photo → a rounded cross-section.
-The result is softened like weathered stone, meshed, and scaled so every rock
-has the same overall size.
+Each outline carves a soft volume: sharp near the middle of the rock along its
+viewing direction, relaxing further away, so that a bump on one outline isn't
+dragged across the whole rock as a groove. With no top photo, every height gets a
+rounded cross-section fitted to it. Optional extras: corner photos (`front_left`,
+`front_right`, `back_left`, `back_right`) carve at 45°, and `RELIEF=1` presses shallow
+hollows in from estimated depth (`pip install torch transformers`; about 1 GB). It helps
+rough, faceted rocks most and does little on smooth ones. Check the clay preview: a
+dark patch in a photo is not always a real dent.
 
 ![Front, side and top outlines, and the carved shape](docs/stage4_carve.jpg)
 
-### 5 · Wrap the photographs back on — `scripts/build_rock.py`
+### 5 · Wrap the photographs back on — `scripts/prepare_textures.py`, `scripts/build_rock.py`
 
-In Blender, each photo is projected onto the shape from the direction it was
-taken; each patch of surface takes the photo facing it most squarely, blending
-where two meet. Missing top/bottom photos borrow the front/back. The photos'
-grain also becomes a bump map. Everything is baked into a colour texture and a
-normal map (1024 px) on a ~30,000-face mesh and exported as one `.glb`.
+The room's broad light is reduced and exposure matched between views. Each photo is
+projected from the direction it was taken, and each patch of surface takes the photo
+facing it most squarely. Missing top or bottom photos are made from the mirrored end
+of the front photo. The photos' fine grain, not their colour patches, becomes the
+normal map.
 
 ![Photo, carved shape, finished rock](docs/stage5_project.jpg)
 
@@ -89,21 +105,26 @@ Blender -b --factory-startup --python scripts/lava_generator.py --python scripts
 ## What it guesses
 
 Outlines and photographs are the real rock; what no view shows is inferred.
-Hollows and undercuts get filled in, views taken with the rock turned
-differently make the carving a best guess, and a shadow left in a cutout
-becomes part of the rock. A photogrammetry or 3D-scanning app captures hidden
-sides exactly, and its files can be used in the same way.
+Hollows are only there if depth estimation is on, hand-held photos are treated as if
+taken from straight on, and hidden parts of the outline are restored from the
+rock's overall shape. A photogrammetry or 3D-scanning app captures hidden sides
+exactly, and its files can be used in the same way.
 
 ## Tuning
 
-| Setting | File | Effect |
-| --- | --- | --- |
-| `RES` | `build_hull.py` | carving detail (cubes along the longest side) |
-| `SMOOTH` | `build_hull.py` | how rounded the carved edges are |
-| `SIZE` | `build_hull.py` | every rock's overall size (bounding-box diagonal) |
-| `TEXTURE_SIZE`, `TARGET_FACES` | `build_rock.py` | texture resolution, mesh detail |
-| `WIRE_CELL`, `JITTER`, `DISSOLVE` | `make_ghost.py` | the wire net's cell size and irregularity |
-| `WIRE_THICKNESS`, `GLASS_ALPHA` | `make_ghost.py` | line weight, glass visibility |
+Every step takes options; run a script with `--help`, or pass them to Blender after
+`--`. The main ones:
 
-`SKILL.md` describes the same process for Claude, so it can run and adjust it
-for you.
+| Option | Script | Effect |
+| --- | --- | --- |
+| `--res`, `--smooth` | `build_hull.py` | carving detail, final softness |
+| `--soften`, `--blend` | `build_hull.py` | outline relaxing, corner rounding |
+| `--size` | `build_hull.py` | every rock's overall size |
+| `--delight` | `prepare_textures.py` | how much of the photos' lighting is removed |
+| `--texture`, `--faces`, `--blend-power` | `build_rock.py` | texture size, mesh detail, width of photo blends |
+| `--wire-cell`, `--jitter`, `--dissolve` | `make_ghost.py` | the wire net |
+| `--wire-thickness`, `--glass-alpha`, `--glass-faces` | `make_ghost.py` | line weight, glass |
+
+Tests: `python3 -m pytest tests`.
+
+`SKILL.md` describes the same process for Claude, so it can run and adjust it for you.

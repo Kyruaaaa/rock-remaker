@@ -20,6 +20,9 @@ import math
 import os
 import sys
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import blender_common as bc  # noqa: E402
+
 # ---------------------------------------------------------------- settings
 ROCK = "TuffRock"                         # the object to export
 OUTPUT = os.path.abspath("rock.glb")      # when run inside Blender without arguments
@@ -39,11 +42,7 @@ layer = bpy.context.view_layer
 src = bpy.data.objects[ROCK]
 
 
-def select_only(obj):
-    for o in layer.objects:
-        o.select_set(False)
-    obj.select_set(True)
-    layer.objects.active = obj
+select_only = bc.select_only
 
 
 def bake_mesh(obj):
@@ -73,52 +72,14 @@ bpy.ops.uv.smart_project(angle_limit=math.radians(66), island_margin=0.003)
 bpy.ops.object.mode_set(mode="OBJECT")
 
 # 3. bake colour and surface detail from the procedural material
-scene.render.engine = "CYCLES"
-scene.cycles.device = "CPU"
-scene.cycles.samples = 8
-mat = low.data.materials[0]
-nodes = mat.node_tree.nodes
-
-
-def bake(kind, name, noncolor=False, **kw):
-    img = bpy.data.images.new(name, TEXTURE_SIZE, TEXTURE_SIZE, alpha=False)
-    if noncolor:
-        img.colorspace_settings.name = "Non-Color"
-    target = nodes.new("ShaderNodeTexImage")
-    target.image = img
-    nodes.active = target                 # Cycles bakes into the active image node
-    bpy.ops.object.bake(type=kind, margin=8, use_clear=True, **kw)
-    nodes.remove(target)
-    img.pack()
-    return img
-
-
-color = bake("DIFFUSE", ROCK + "_color", pass_filter={"COLOR"})
-normal = bake("NORMAL", ROCK + "_normal", noncolor=True, normal_space="TANGENT")
-
-# a plain material glTF understands: baked colour + normal map
-web = bpy.data.materials.new(ROCK + "_web")
-web.use_nodes = True
-wn, wl = web.node_tree.nodes, web.node_tree.links
-bsdf = wn["Principled BSDF"]
-bsdf.inputs["Roughness"].default_value = 0.95
-tc = wn.new("ShaderNodeTexImage"); tc.image = color
-wl.new(tc.outputs["Color"], bsdf.inputs["Base Color"])
-tn = wn.new("ShaderNodeTexImage"); tn.image = normal
-nm = wn.new("ShaderNodeNormalMap")
-wl.new(tn.outputs["Color"], nm.inputs["Color"])
-wl.new(nm.outputs["Normal"], bsdf.inputs["Normal"])
+bc.setup_bake()
+nodes = low.data.materials[0].node_tree.nodes
+color = bc.bake(nodes, "DIFFUSE", ROCK + "_color", TEXTURE_SIZE, pass_filter={"COLOR"})
+normal = bc.bake(nodes, "NORMAL", ROCK + "_normal", TEXTURE_SIZE, noncolor=True, normal_space="TANGENT")
 low.data.materials.clear()
-low.data.materials.append(web)
+low.data.materials.append(bc.web_material(ROCK + "_web", color, normal, 0.95))
 
 # 4. export just the web copy
 select_only(low)
-bpy.ops.export_scene.gltf(
-    filepath=OUTPUT,
-    export_format="GLB",
-    use_selection=True,
-    export_apply=True,
-    export_yup=True,
-    export_image_format="JPEG",
-)
+bc.export_glb(OUTPUT)
 print("exported", OUTPUT)

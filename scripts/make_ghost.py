@@ -12,19 +12,30 @@ shell, with a fine wireframe of its surface drawn over it.
            dips; then turned into thin struts
 """
 
+import argparse
 import bmesh
 import bpy
 import os
 import random
 import sys
 
-argv = sys.argv[sys.argv.index("--") + 1:]
-SRC, OUT = os.path.abspath(argv[0]), os.path.abspath(argv[1])
-WIRE_CELL = 0.06          # rough size of the net's cells (smaller = finer)
-JITTER = 0.45             # how far each point is nudged, as a share of a cell
-DISSOLVE = 0.3            # share of edges removed, merging cells into bigger irregular ones
-WIRE_THICKNESS = 0.0035   # strut thickness (the rocks are ~1 unit tall)
-GLASS_ALPHA = 0.3         # 0 = invisible, 1 = solid
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import blender_common as bc  # noqa: E402
+
+p = argparse.ArgumentParser()
+p.add_argument("source")
+p.add_argument("out")
+p.add_argument("--wire-cell", type=float, default=0.06, help="rough size of the net's cells")
+p.add_argument("--jitter", type=float, default=0.45, help="how far each point is nudged, share of a cell")
+p.add_argument("--dissolve", type=float, default=0.3, help="share of edges removed")
+p.add_argument("--wire-thickness", type=float, default=0.0035, help="strut thickness")
+p.add_argument("--glass-alpha", type=float, default=0.3, help="0 invisible, 1 solid")
+p.add_argument("--glass-faces", type=int, default=6000, help="the glass is smooth, so it needs few faces")
+p.add_argument("--no-draco", action="store_true", help="skip mesh compression")
+args = p.parse_args(bc.script_args())
+SRC, OUT = os.path.abspath(args.source), os.path.abspath(args.out)
+WIRE_CELL, JITTER, DISSOLVE = args.wire_cell, args.jitter, args.dissolve
+WIRE_THICKNESS, GLASS_ALPHA = args.wire_thickness, args.glass_alpha
 
 scene = bpy.context.scene
 layer = bpy.context.view_layer
@@ -78,17 +89,15 @@ def material(name, color, alpha, roughness):
     b.inputs["Alpha"].default_value = alpha
     b.inputs["Roughness"].default_value = roughness
     b.inputs["Metallic"].default_value = 0.0
-    if alpha < 1:
-        m.surface_render_method = "BLENDED"   # exported as a see-through (blend) material
+    if alpha < 1:                             # exported as a see-through (blend) material
+        if hasattr(m, "surface_render_method"):
+            m.surface_render_method = "BLENDED"   # Blender 4.2+
+        else:
+            m.blend_method = "BLEND"
     return m
 
 
-def apply_modifiers(obj):
-    dg = bpy.context.evaluated_depsgraph_get()
-    mesh = bpy.data.meshes.new_from_object(obj.evaluated_get(dg))
-    obj.modifiers.clear()
-    old, obj.data = obj.data, mesh
-    bpy.data.meshes.remove(old)
+apply_modifiers = bc.apply_modifiers
 
 
 # glass shell: the rock's own surface, smooth and glossy
@@ -141,7 +150,23 @@ apply_modifiers(wire)
 wire.data.materials.clear()
 wire.data.materials.append(material("Wire", (0.22, 0.23, 0.24, 1), 1.0, 0.6))
 
+# the glass is only a faint shell: weld its texture seams, then thin it out
+bm = bmesh.new()
+bm.from_mesh(glass.data)
+bmesh.ops.remove_doubles(bm, verts=bm.verts[:], dist=1e-4)
+bm.to_mesh(glass.data)
+bm.free()
+keep_largest(glass)
+if len(glass.data.polygons) > args.glass_faces:
+    thin = glass.modifiers.new("Thin", "DECIMATE")
+    thin.ratio = args.glass_faces / len(glass.data.polygons)
+    apply_modifiers(glass)
+for poly in glass.data.polygons:
+    poly.use_smooth = True
+while glass.data.uv_layers:
+    glass.data.uv_layers.remove(glass.data.uv_layers[0])
+
 for o in layer.objects:
     o.select_set(o in (glass, wire))
-bpy.ops.export_scene.gltf(filepath=OUT, export_format="GLB", use_selection=True, export_yup=True)
-print("ghost exported", OUT, "wire faces", len(wire.data.polygons))
+bc.export_glb(OUT, draco=not args.no_draco, image_format="NONE", export_texcoords=False)
+print("ghost exported", OUT, "glass faces", len(glass.data.polygons), "wire faces", len(wire.data.polygons), f"{os.path.getsize(OUT) // 1024} KB")
