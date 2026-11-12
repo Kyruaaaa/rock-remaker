@@ -50,6 +50,12 @@ is found by being sharp, central and differently coloured from the room. Each vi
 becomes an outline and a photo whose background is filled with the rock's own
 colours, so no room or white bleeds onto the model.
 
+When the room is in focus or cluttered, `MATTE=rembg ./remake.sh …` uses a trained
+background remover instead (`pip install "rembg[cpu]"`). Hands are cut away by colour,
+and thin things the remover keeps with the rock, like a pole or a cable, are trimmed
+off. For a green or grey rock held in a pale hand, add `SKIN_A=5` so the whole palm
+counts as skin.
+
 ![View, outline, filled photo](docs/stage2_cutout.jpg)
 
 ### 3 · Turn the views upright — `scripts/orient.py`
@@ -78,8 +84,12 @@ dark patch in a photo is not always a real dent.
 The room's broad light is reduced and exposure matched between views. Each photo is
 projected from the direction it was taken, and each patch of surface takes the photo
 facing it most squarely. Missing top or bottom photos are made from the mirrored end
-of the front photo. The photos' fine grain, not their colour patches, becomes the
-normal map.
+of the front photo, and a missing back or side borrows the opposite photo. The
+photos' fine grain, not their colour patches, becomes the normal map.
+
+For rocks with mica or other glinting flakes, `ROCK_ARGS="--sparkle 0.12 --texture 2048"`
+scatters small, smooth, randomly tilted flakes over the surface and bakes them into a
+roughness map, so they catch the light as the model turns in any glTF viewer.
 
 ![Photo, carved shape, finished rock](docs/stage5_project.jpg)
 

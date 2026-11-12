@@ -13,6 +13,9 @@
 #
 # BLENDER=path  Blender 4.2 or newer, if it isn't in /Applications or on the PATH
 # RELIEF=1      press hollows in with estimate_depth.py (needs torch + transformers)
+# MATTE=rembg   use the rembg background remover (cluttered or in-focus rooms)
+# ROCK_ARGS     extra build_rock.py options, e.g. "--sparkle 0.12 --texture 2048"
+# SKIN_A        skin-filter redness floor (default 11); ~5 for green or grey rocks in pale hands
 # DEPTH_PYTHON  a separate Python that has torch + transformers, if not the main one
 
 set -u -o pipefail
@@ -44,11 +47,11 @@ make_rock() {  # source, name
   mkdir -p "$work"
   local log="$work/build.log"
   : >"$log"
-  "$PY" "$HERE/scripts/cutout_views.py" "$src" "$work" || return 1
+  "$PY" "$HERE/scripts/cutout_views.py" "$src" "$work" --matte "${MATTE:-auto}" || return 1
   if [ "${RELIEF:-0}" = 1 ]; then "${DEPTH_PYTHON:-$PY}" "$HERE/scripts/estimate_depth.py" "$work" || return 1; fi
   "$PY" "$HERE/scripts/build_hull.py" "$work" || return 1
   "$PY" "$HERE/scripts/prepare_textures.py" "$work" || return 1
-  run_blender "$log" build_rock.py "$work" "$work/rock.glb" || { tail -n 15 "$log" >&2; return 1; }
+  run_blender "$log" build_rock.py "$work" "$work/rock.glb" ${ROCK_ARGS:-} || { tail -n 15 "$log" >&2; return 1; }
   run_blender "$log" make_ghost.py "$work/rock.glb" "$work/ghost.glb" || { tail -n 15 "$log" >&2; return 1; }
   "$PY" "$HERE/scripts/qa_report.py" "$work" || return 1
   mv "$work/rock.glb" "$OUT/$name.glb" && mv "$work/ghost.glb" "$OUT/${name}_ghost.glb"

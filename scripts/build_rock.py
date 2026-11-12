@@ -29,6 +29,9 @@ p.add_argument("--texture", type=int, default=1024, help="baked texture size in 
 p.add_argument("--faces", type=int, default=30000, help="target mesh faces")
 p.add_argument("--blend-power", type=float, default=8.0, help="higher = narrower blend between photos")
 p.add_argument("--lumps", type=float, default=0.015, help="made-up surface irregularity, 0 for none")
+p.add_argument("--sparkle", type=float, default=0.0,
+               help="mica/glitter: share of the surface covered by mirror-like flakes, e.g. 0.12; 0 for none")
+p.add_argument("--flake-size", type=float, default=0.008, help="flake size as a share of the rock's height")
 p.add_argument("--no-draco", action="store_true", help="skip mesh compression")
 a = p.parse_args(bc.script_args())
 
@@ -145,12 +148,51 @@ for name, v in rig["views"].items():
 
 inv = math_node("DIVIDE", 1.0, weight_sum)
 final = vec_op("SCALE", colour_sum, inv)
-L.new(final, bsdf.inputs["Base Color"])
 bump = N.new("ShaderNodeBump")
 bump.inputs["Strength"].default_value = 0.6
 bump.inputs["Distance"].default_value = 0.012
 L.new(math_node("MULTIPLY", height_sum, inv), bump.inputs["Height"])
-L.new(bump.outputs["Normal"], bsdf.inputs["Normal"])
+
+flake = None
+if a.sparkle > 0:
+    # mica: small flat flakes, each a little mirror tilted its own way
+    vor = N.new("ShaderNodeTexVoronoi")
+    vor.feature = "F1"
+    vor.inputs["Scale"].default_value = 1.0 / (a.flake_size * H)
+    vor.inputs["Randomness"].default_value = 1.0
+    L.new(tc.outputs["Object"], vor.inputs["Vector"])
+    rnd = N.new("ShaderNodeSeparateColor")
+    L.new(vor.outputs["Color"], rnd.inputs["Color"])
+    flake = math_node("GREATER_THAN", rnd.outputs["Red"], 1.0 - a.sparkle)
+    # tilt: height rising across the flake in a random direction -> a flat, tilted facet
+    centre_offset = vec_op("SUBTRACT", tc.outputs["Object"], vor.outputs["Position"])
+    rand_vec = N.new("ShaderNodeVectorMath")
+    rand_vec.operation = "SUBTRACT"
+    L.new(vor.outputs["Color"], rand_vec.inputs[0])
+    rand_vec.inputs[1].default_value = (0.5, 0.5, 0.5)
+    slope = N.new("ShaderNodeVectorMath")
+    slope.operation = "DOT_PRODUCT"
+    L.new(centre_offset, slope.inputs[0])
+    L.new(rand_vec.outputs["Vector"], slope.inputs[1])
+    tilt = math_node("MULTIPLY", math_node("MULTIPLY", slope.outputs["Value"], flake), 1.4)
+    fb = N.new("ShaderNodeBump")
+    fb.inputs["Strength"].default_value = 1.0
+    fb.inputs["Distance"].default_value = 1.0
+    L.new(tilt, fb.inputs["Height"])
+    L.new(bump.outputs["Normal"], fb.inputs["Normal"])
+    normal_out = fb.outputs["Normal"]
+    # flakes read a touch lighter and silvery
+    mix = N.new("ShaderNodeMix")
+    mix.data_type = "RGBA"
+    mix.blend_type = "SCREEN"
+    L.new(math_node("MULTIPLY", flake, 0.35), mix.inputs["Factor"])
+    L.new(final, mix.inputs["A"])
+    mix.inputs["B"].default_value = (0.85, 0.85, 0.82, 1)
+    final = mix.outputs["Result"]
+else:
+    normal_out = bump.outputs["Normal"]
+L.new(final, bsdf.inputs["Base Color"])
+L.new(normal_out, bsdf.inputs["Normal"])
 rock.data.materials.clear()
 rock.data.materials.append(mat)
 
@@ -158,8 +200,19 @@ rock.data.materials.append(mat)
 bc.setup_bake()
 color = bc.bake(N, "DIFFUSE", "rock_color", a.texture, pass_filter={"COLOR"})
 normal = bc.bake(N, "NORMAL", "rock_normal", a.texture, noncolor=True, normal_space="TANGENT")
+rough = None
+if flake is not None:
+    def bake_value(value, name):
+        em = N.new("ShaderNodeEmission")
+        L.new(value, em.inputs["Color"])
+        L.new(em.outputs["Emission"], output.inputs["Surface"])
+        img = bc.bake(N, "EMIT", name, a.texture, noncolor=True)
+        L.new(bsdf.outputs["BSDF"], output.inputs["Surface"])
+        return img
+    # mica is glassy, not metal: its glint comes from smooth, tilted faces alone
+    rough = bake_value(math_node("MULTIPLY_ADD", flake, -0.75, 0.9), "rock_roughness")   # 0.9 stone, 0.15 flake
 rock.data.materials.clear()
-rock.data.materials.append(bc.web_material("Rock", color, normal, 0.9))
+rock.data.materials.append(bc.web_material("Rock", color, normal, 0.9, rough))
 
 # ---------------------------------------------------------------- export
 bc.select_only(rock)

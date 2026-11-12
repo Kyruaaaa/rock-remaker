@@ -147,6 +147,34 @@ def test_top_is_inferred_when_missing(tmp_path):
     assert rig["views"]["top"]["inferred"] and rig["views"]["bottom"]["inferred"]
 
 
+def test_missing_back_borrows_the_front_photo(tmp_path):
+    d = str(tmp_path / "rock")
+    v = views_of(blob())
+    write(d, {k: v[k] for k in ("front", "right", "left", "top")})
+    build_hull.main([d])
+    prepare_textures.main([d])
+    views = json.load(open(os.path.join(d, "rig.json")))["views"]
+    assert views["back"]["inferred"] and views["back"]["image"] == views["front"]["image"]
+    assert views["back"]["facing"] == [-x for x in views["front"]["facing"]]
+    assert not views["right"].get("inferred")
+
+
+def test_thin_pole_is_trimmed_off_the_rock():
+    yy, xx = np.mgrid[0:400, 0:300]
+    rock = (xx - 150) ** 2 / 90 ** 2 + (yy - 150) ** 2 / 120 ** 2 < 1
+    pole = (abs(xx - 160) < 8) & (yy > 200)
+    out = cutout_views.trim_spurs(rock | pole)
+    assert not out[300:, :].any()                          # the pole is gone
+    assert out.sum() > 0.97 * rock.sum()                   # the rock is kept
+
+
+def test_skin_floor_can_be_lowered_for_pale_hands(monkeypatch):
+    pale_palm = np.array([[[75.0, 8.0, 9.0]]], np.float32)   # L*, a*, b*
+    assert not cutout_views.skin_mask(pale_palm).any()
+    monkeypatch.setenv("SKIN_A", "5")
+    assert cutout_views.skin_mask(pale_palm).all()
+
+
 def test_white_background_fill_has_no_white(tmp_path):
     rgb = np.full((300, 300, 3), 255, np.uint8)
     yy, xx = np.mgrid[0:300, 0:300]

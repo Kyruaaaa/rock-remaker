@@ -100,19 +100,45 @@ def white_matte(rgb, alpha=None):
     return clean(mask)
 
 
+_REMBG = {}
+
+
 def rembg_matte(rgb):
+    """A trained background remover: best when the room is in focus or cluttered.
+    REMBG_MODEL picks the model (default isnet-general-use). Hands are cut away."""
     try:
-        from rembg import remove
+        from rembg import new_session, remove
     except ImportError:
-        sys.exit("--matte rembg needs the rembg package (pip install rembg)")
-    a = np.asarray(remove(Image.fromarray(rgb), only_mask=True))
-    return clean(a > 127)
+        sys.exit("--matte rembg needs the rembg package (pip install rembg[cpu])")
+    name = os.environ.get("REMBG_MODEL", "isnet-general-use")
+    if name not in _REMBG:
+        _REMBG[name] = new_session(name)
+    a = np.asarray(remove(Image.fromarray(rgb), session=_REMBG[name], only_mask=True))
+    mask = a > 127
+    lab = color.rgb2lab(rgb).astype(np.float32)
+    hand = ndimage.binary_opening(skin_mask(lab), iterations=2)
+    mask &= ~ndimage.binary_dilation(hand, iterations=max(2, max(rgb.shape[:2]) // 300))
+    mask = clean(mask)
+    return None if mask is None else trim_spurs(mask)
+
+
+def trim_spurs(mask, frac=0.06):
+    """Cut off thin things the remover kept with the rock (a pole, a cable, a strap):
+    anything narrower than about an eighth of the rock's size."""
+    r = max(3.0, frac * float(np.sqrt(mask.sum())))
+    core = ndimage.distance_transform_edt(mask) > r
+    labels, n = ndimage.label(core)
+    if n == 0:
+        return mask
+    core = labels == int(np.argmax(ndimage.sum(core, labels, range(1, n + 1)))) + 1
+    return mask & (ndimage.distance_transform_edt(~core) <= r + 1.5)
 
 
 def skin_mask(lab):
     """Hands: pink-orange and reasonably bright. Grey-brown stone has much lower a*."""
     L, a, b = lab[..., 0], lab[..., 1], lab[..., 2]
-    return (a > 11) & (b > 4) & (L > 28) & (a / np.maximum(b, 1) > 0.55)
+    floor = float(os.environ.get("SKIN_A", 11))   # lower it for green/grey rocks held in pale hands
+    return (a > floor) & (b > 4) & (L > 28) & (a / np.maximum(b, 1) > 0.55)
 
 
 def fit(pixels, k):
