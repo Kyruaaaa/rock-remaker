@@ -135,6 +135,14 @@ def main(argv=None):
             "su": 1 / rig["W"], "ou": 0.5, "sv": 1 / rig["D"], "ov": 0.5,
         }
 
+    # a missing side borrows the opposite side's photo, projected straight through
+    for name, other in (("back", "front"), ("left", "right"), ("right", "left")):
+        if name not in rig["views"] and other in rig["views"] and not rig["views"][other].get("inferred"):
+            v = dict(rig["views"][other])
+            v["facing"] = [-x for x in v["facing"]]
+            v["inferred"] = True
+            rig["views"][name] = v
+
     json.dump(rig, open(os.path.join(d, "rig.json"), "w"), indent=1)
     inferred = [n for n, v in rig["views"].items() if v.get("inferred")]
     print("textures ready" + (f"; inferred from the front photo: {', '.join(inferred)}" if inferred else ""))

@@ -46,8 +46,8 @@ def bake(nodes, kind, name, size, noncolor=False, **kw):
     return img
 
 
-def web_material(name, color, normal, roughness):
-    """A plain material glTF understands: baked colour + normal map."""
+def web_material(name, color, normal, roughness, rough_map=None):
+    """A plain material glTF understands: baked colour + normal map (+ an optional roughness map)."""
     m = bpy.data.materials.new(name)
     m.use_nodes = True
     nodes, links = m.node_tree.nodes, m.node_tree.links
@@ -61,6 +61,10 @@ def web_material(name, color, normal, roughness):
     nm = nodes.new("ShaderNodeNormalMap")
     links.new(n.outputs["Color"], nm.inputs["Color"])
     links.new(nm.outputs["Normal"], bsdf.inputs["Normal"])
+    if rough_map is not None:
+        t = nodes.new("ShaderNodeTexImage")
+        t.image = rough_map
+        links.new(t.outputs["Color"], bsdf.inputs["Roughness"])
     return m
 
 
