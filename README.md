@@ -53,8 +53,9 @@ colours, so no room or white bleeds onto the model.
 When the room is in focus or cluttered, `MATTE=rembg ./remake.sh …` uses a trained
 background remover instead (`pip install "rembg[cpu]"`). Hands are cut away by colour,
 and thin things the remover keeps with the rock, like a pole or a cable, are trimmed
-off. For a green or grey rock held in a pale hand, add `SKIN_A=5` so the whole palm
-counts as skin.
+off. Only smooth skin-coloured areas count as hand, so pink granite or red scoria
+keeps its surface. For a green or grey rock held in a pale hand, add `SKIN_A=5` so the
+whole palm counts as skin.
 
 ![View, outline, filled photo](docs/stage2_cutout.jpg)
 
@@ -85,7 +86,8 @@ The room's broad light is reduced and exposure matched between views. Each photo
 projected from the direction it was taken, and each patch of surface takes the photo
 facing it most squarely. Missing top or bottom photos are made from the mirrored end
 of the front photo, and a missing back or side borrows the opposite photo. The
-photos' fine grain, not their colour patches, becomes the normal map.
+photos' fine grain, not their colour patches, becomes the normal map. `SATURATE=1.2`
+makes the colours a little richer than the photos, at the same brightness.
 
 For rocks with mica or other glinting flakes, `ROCK_ARGS="--sparkle 0.12 --texture 2048"`
 scatters small, smooth, randomly tilted flakes over the surface and bakes them into a

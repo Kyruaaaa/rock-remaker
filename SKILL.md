@@ -28,6 +28,7 @@ Wrong turn → `work/NAME/overrides.json`: `{"rotate": {"top": 180}}`, then reru
 `build_hull.py` onward. `RELIEF=1` adds depth-based hollows (needs torch, transformers).
 `MATTE=rembg` uses a trained background remover for cluttered or in-focus rooms.
 `ROCK_ARGS="--sparkle 0.12 --texture 2048"` adds glinting mica flakes for shiny rocks.
+`SATURATE=1.2` makes colours a little richer than the photos.
 
 ## Pipeline (one script per stage)
 
@@ -54,6 +55,10 @@ Hand-built rocks: `tuff_generator.py` / `lava_generator.py`, then
 - **Pale parts missing on a hand-held photo** → try `--matte rembg` (`MATTE=rembg`).
 - **A tail or stick hanging off the rock** → the remover kept a pole or cable;
   rembg cutouts trim anything thinner than about an eighth of the rock.
+- **Holes in a pink or red rock** → skin-coloured stone was cut as a hand; hands now
+  also have to be smooth (local lightness spread under 2.5), which grainy stone isn't.
+- **Front and back photos swapped on a thin slab** → the mesh was inside out; the
+  build now flips it whenever its signed volume is negative.
 - **Pink patches on a green or grey rock** → a pale palm passed the skin filter;
   rerun with `SKIN_A=5` (the default, 11, is safe for reddish rocks).
 - **Mica, glitter or a wet-looking shine** → `--sparkle`. Keep flakes non-metallic:

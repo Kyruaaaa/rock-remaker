@@ -116,7 +116,7 @@ def rembg_matte(rgb):
     a = np.asarray(remove(Image.fromarray(rgb), session=_REMBG[name], only_mask=True))
     mask = a > 127
     lab = color.rgb2lab(rgb).astype(np.float32)
-    hand = ndimage.binary_opening(skin_mask(lab), iterations=2)
+    hand = ndimage.binary_opening(skin_mask(lab) & smooth(lab[..., 0]), iterations=2)
     mask &= ~ndimage.binary_dilation(hand, iterations=max(2, max(rgb.shape[:2]) // 300))
     mask = clean(mask)
     return None if mask is None else trim_spurs(mask)
@@ -132,6 +132,15 @@ def trim_spurs(mask, frac=0.06):
         return mask
     core = labels == int(np.argmax(ndimage.sum(core, labels, range(1, n + 1)))) + 1
     return mask & (ndimage.distance_transform_edt(~core) <= r + 1.5)
+
+
+def smooth(L, limit=2.5):
+    """Skin is smooth (local spread of lightness about 1); stone, even pink granite
+    or red scoria, is grainy (4 and up). Keeps reddish rocks from being cut as hands."""
+    w = max(3, max(L.shape) // 150)
+    mean = ndimage.uniform_filter(L, w)
+    sd = np.sqrt(np.maximum(ndimage.uniform_filter(L * L, w) - mean ** 2, 0))
+    return sd < limit
 
 
 def skin_mask(lab):
