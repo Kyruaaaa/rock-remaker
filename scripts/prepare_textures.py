@@ -52,6 +52,12 @@ def delight(rgb, mask, strength):
     return np.clip(rgb * ratio[..., None], 0, 255)
 
 
+def saturate(rgb, amount):
+    """Scale colour away from grey at the same brightness."""
+    luma = (rgb @ LUMA)[..., None]
+    return np.clip(luma + (rgb - luma) * amount, 0, 255)
+
+
 def height_map(rgb, mask):
     """High-pass luminance: grain, not colour patches. 0.5 is neutral."""
     luma = (rgb @ LUMA).astype(np.float32)
@@ -78,6 +84,7 @@ def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("rock_dir")
     p.add_argument("--delight", type=float, default=0.6, help="0 keeps the photo's lighting, 1 removes all broad light")
+    p.add_argument("--saturate", type=float, default=1.0, help="colour strength: 1 as photographed, 1.2 a little richer")
     a = p.parse_args(argv)
     d = a.rock_dir
     rig = json.load(open(os.path.join(d, "rig.json")))
@@ -112,6 +119,10 @@ def main(argv=None):
     for name in photos:
         photos[name] = np.clip(photos[name] / overall, 0, 255)
         gains[name] = gains[name] / overall
+
+    if a.saturate != 1.0:
+        for name in photos:
+            photos[name] = saturate(photos[name], a.saturate)
 
     for name in list(photos):
         Image.fromarray(photos[name].astype(np.uint8)).save(os.path.join(d, f"{name}_tex.png"))

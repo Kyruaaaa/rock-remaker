@@ -17,6 +17,7 @@ import math
 import os
 import sys
 
+import bmesh
 import bpy
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -64,6 +65,17 @@ bc.apply_modifiers(rock)
 bpy.ops.object.mode_set(mode="EDIT")
 bpy.ops.mesh.select_all(action="SELECT")
 bpy.ops.mesh.normals_make_consistent(inside=False)
+bpy.ops.object.mode_set(mode="OBJECT")
+# on thin slabs Blender can pick the wrong side: an outward-facing closed mesh has positive volume
+bm = bmesh.new()
+bm.from_mesh(rock.data)
+if bm.calc_volume(signed=True) < 0:
+    bmesh.ops.reverse_faces(bm, faces=bm.faces)
+    bm.to_mesh(rock.data)
+    print("normals were inside out; flipped")
+bm.free()
+bpy.ops.object.mode_set(mode="EDIT")
+bpy.ops.mesh.select_all(action="SELECT")
 bpy.ops.uv.smart_project(angle_limit=math.radians(66), island_margin=0.008)   # about 8 px: seams survive mipmapping
 bpy.ops.object.mode_set(mode="OBJECT")
 bpy.ops.object.shade_smooth()

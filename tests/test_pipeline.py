@@ -175,6 +175,22 @@ def test_skin_floor_can_be_lowered_for_pale_hands(monkeypatch):
     assert cutout_views.skin_mask(pale_palm).all()
 
 
+def test_saturate_keeps_brightness_and_strengthens_colour():
+    rgb = np.array([[[150.0, 110.0, 90.0]]], np.float32)
+    out = prepare_textures.saturate(rgb, 1.2)
+    luma = lambda a: float((a @ prepare_textures.LUMA).ravel()[0])
+    assert abs(luma(out) - luma(rgb)) < 0.5
+    assert np.ptp(out) > np.ptp(rgb)
+
+
+def test_grainy_pink_stone_is_not_mistaken_for_a_hand():
+    rng = np.random.default_rng(0)
+    skin = np.full((120, 120), 70.0, np.float32) + rng.normal(0, 0.5, (120, 120))
+    stone = np.full((120, 120), 60.0, np.float32) + rng.normal(0, 8, (120, 120))
+    assert cutout_views.smooth(skin).mean() > 0.95
+    assert cutout_views.smooth(stone).mean() < 0.05
+
+
 def test_white_background_fill_has_no_white(tmp_path):
     rgb = np.full((300, 300, 3), 255, np.uint8)
     yy, xx = np.mgrid[0:300, 0:300]
